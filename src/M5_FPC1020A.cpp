@@ -63,19 +63,17 @@ uint8_t FingerPrint::fpm_sendAndReceive(uint16_t timeout) {
 }
 
 #else
-
+#include "esp_log.h"
 void FingerPrint::begin(uart_port_t uart_num, int tx_io_num, int rx_io_num,
                         int rts_io_num, int cts_io_num) {
   _uart_num = uart_num;
-  uart_config_t uart_config = {
-      .baud_rate = 19200,
-      .data_bits = UART_DATA_8_BITS,
-      .parity = UART_PARITY_DISABLE,
-      .stop_bits = UART_STOP_BITS_1,
-      .flow_ctrl = UART_HW_FLOWCTRL_CTS_RTS,
-      .rx_flow_ctrl_thresh = 122,
-      .source_clk = UART_SCLK_DEFAULT,
-  };
+  uart_config_t uart_config = {.baud_rate = 19200,
+                               .data_bits = UART_DATA_8_BITS,
+                               .parity = UART_PARITY_DISABLE,
+                               .stop_bits = UART_STOP_BITS_1,
+                               .flow_ctrl = UART_HW_FLOWCTRL_CTS_RTS,
+                               .rx_flow_ctrl_thresh = 122,
+                               .source_clk = UART_SCLK_DEFAULT};
   int intr_alloc_flags = 0;
 
 #if CONFIG_UART_ISR_IN_IRAM
@@ -83,7 +81,7 @@ void FingerPrint::begin(uart_port_t uart_num, int tx_io_num, int rx_io_num,
 #endif
 
   ESP_ERROR_CHECK(
-      uart_driver_install(_uart_num, 128, 0, 0, NULL, intr_alloc_flags));
+      uart_driver_install(_uart_num, 1024, 0, 0, NULL, intr_alloc_flags));
   ESP_ERROR_CHECK(uart_param_config(_uart_num, &uart_config));
   ESP_ERROR_CHECK(
       uart_set_pin(_uart_num, tx_io_num, rx_io_num, rts_io_num, cts_io_num));
@@ -92,26 +90,32 @@ void FingerPrint::begin(uart_port_t uart_num, int tx_io_num, int rx_io_num,
 FingerPrint::~FingerPrint() { uart_driver_delete(_uart_num); }
 
 uint8_t FingerPrint::fpm_sendAndReceive(uint16_t timeout) {
-  uint8_t i, j;
   uint8_t checkSum = 0;
-  for (i = 1; i < 5; i++) {
+  for (int i = 1; i < 5; i++) {
     checkSum ^= TxBuf[i];
   }
 
-  memset(RxBuf, 0, 9);
+  memset(RxBuf, 0, sizeof(RxBuf));
   char byte_to_send[] = {CMD_HEAD, TxBuf[1], TxBuf[2], TxBuf[3],
                          TxBuf[4], 0,        checkSum, CMD_TAIL};
   uart_write_bytes(_uart_num, byte_to_send, sizeof(byte_to_send));
+  while (uart_wait_tx_done(_uart_num, 20 / portTICK_PERIOD_MS) != ESP_OK) {
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+  }
 
   unsigned long start = esp_timer_get_time() / 1000;
   size_t data_len = 0;
   while (uart_get_buffered_data_len(_uart_num, &data_len) == ESP_OK ||
          (esp_timer_get_time() / 1000 - start) < timeout) {
-    uart_read_bytes(_uart_num, RxBuf, sizeof(RxBuf), 100);
+    if (data_len <= 0) {
+      vTaskDelay(10 / portTICK_PERIOD_MS);
+      continue;
+    }
+    uart_read_bytes(_uart_num, RxBuf, sizeof(RxBuf), 20 / portTICK_PERIOD_MS);
     if (RxBuf[0] == 0xf5 && RxBuf[7] == 0xf5) {
       break;
     }
-      vTaskDelay(1);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
   }
   if (RxBuf[HEAD] != CMD_HEAD)
     return ACK_FAIL;
@@ -121,7 +125,7 @@ uint8_t FingerPrint::fpm_sendAndReceive(uint16_t timeout) {
     return ACK_FAIL;
 
   checkSum = 0;
-  for (j = 1; j < CHK; j++) {
+  for (int j = 1; j < CHK; j++) {
     checkSum ^= RxBuf[j];
   }
   if (checkSum != RxBuf[CHK]) {
