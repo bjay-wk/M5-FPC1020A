@@ -103,10 +103,10 @@ uint8_t FingerPrint::fpm_sendAndReceive(uint16_t timeout) {
     vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 
-  unsigned long start = esp_timer_get_time() / 1000;
+  int64_t end = esp_timer_get_time() + timeout * 1000;
   size_t data_len = 0;
-  while (uart_get_buffered_data_len(_uart_num, &data_len) == ESP_OK ||
-         (esp_timer_get_time() / 1000 - start) < timeout) {
+  while (uart_get_buffered_data_len(_uart_num, &data_len) == ESP_OK &&
+         esp_timer_get_time() < end) {
     if (data_len <= 0) {
       vTaskDelay(10 / portTICK_PERIOD_MS);
       continue;
